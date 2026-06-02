@@ -16,7 +16,18 @@ function json(statusCode, body) {
 function normalizeToken(input) {
   const text = String(input || "").trim();
   const match = text.match(/\/(?:sheets|spreadsheet)\/([A-Za-z0-9_-]+)/);
-  return match ? match[1] : text;
+  if (match) return { type: "sheet", token: match[1] };
+  const wikiMatch = text.match(/\/wiki\/([A-Za-z0-9_-]+)/);
+  if (wikiMatch) {
+    let sheetId = "";
+    try {
+      sheetId = new URL(text).searchParams.get("sheet") || "";
+    } catch (_) {
+      sheetId = "";
+    }
+    return { type: "wiki", token: wikiMatch[1], sheetId };
+  }
+  return { type: "sheet", token: text };
 }
 
 async function feishuFetch(path, options = {}) {
@@ -46,6 +57,27 @@ async function getTenantAccessToken() {
   return data.tenant_access_token;
 }
 
+async function resolveSpreadsheetToken(resource, tenantAccessToken) {
+  if (resource.type !== "wiki") return resource;
+  const data = await feishuFetch(`/wiki/v2/spaces/get_node?token=${encodeURIComponent(resource.token)}`, {
+    headers: { Authorization: `Bearer ${tenantAccessToken}` },
+  });
+  const node = data.data?.node || data.data;
+  const objType = node?.obj_type || node?.objType;
+  const objToken = node?.obj_token || node?.objToken;
+  if (!objToken) {
+    throw new Error("Wiki 节点没有返回对应的云文档 token，请确认链接指向电子表格。");
+  }
+  if (objType && !["sheet", "sheets", "spreadsheet"].includes(String(objType).toLowerCase())) {
+    throw new Error(`这个 Wiki 节点不是电子表格，类型是 ${objType}。请打开真正的电子表格后复制 /sheets/ 链接。`);
+  }
+  return {
+    type: "sheet",
+    token: objToken,
+    preferredSheetId: resource.sheetId,
+  };
+}
+
 async function querySheets(token, tenantAccessToken) {
   const data = await feishuFetch(`/sheets/v3/spreadsheets/${token}/sheets/query`, {
     headers: { Authorization: `Bearer ${tenantAccessToken}` },
@@ -71,7 +103,7 @@ exports.handler = async (event) => {
 
   try {
     const action = event.queryStringParameters?.action;
-    const token = normalizeToken(event.queryStringParameters?.token);
+    const resource = normalizeToken(event.queryStringParameters?.token);
     const sheetId = event.queryStringParameters?.sheetId;
     const range = event.queryStringParameters?.range || "A1:K120";
     if (!action) {
@@ -82,15 +114,19 @@ exports.handler = async (event) => {
         hasAppSecret: Boolean(process.env.FEISHU_APP_SECRET),
       });
     }
-    if (!token) return json(400, { error: "缺少飞书表格 token 或链接。" });
+    if (!resource.token) return json(400, { error: "缺少飞书表格 token 或链接。" });
 
     const tenantAccessToken = await getTenantAccessToken();
+    const spreadsheet = await resolveSpreadsheetToken(resource, tenantAccessToken);
     if (action === "sheets") {
-      return json(200, { sheets: await querySheets(token, tenantAccessToken) });
+      return json(200, {
+        sheets: await querySheets(spreadsheet.token, tenantAccessToken),
+        preferredSheetId: spreadsheet.preferredSheetId || "",
+      });
     }
     if (action === "values") {
       if (!sheetId) return json(400, { error: "缺少 sheetId。" });
-      return json(200, { values: await readValues(token, sheetId, range, tenantAccessToken) });
+      return json(200, { values: await readValues(spreadsheet.token, sheetId, range, tenantAccessToken) });
     }
     return json(400, { error: "未知 action。" });
   } catch (error) {

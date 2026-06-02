@@ -75,6 +75,8 @@ function extractSpreadsheetToken(input) {
   if (!text) return "";
   const match = text.match(/\/(?:sheets|spreadsheet)\/([A-Za-z0-9_-]+)/);
   if (match) return match[1];
+  const wikiMatch = text.match(/\/wiki\/([A-Za-z0-9_-]+)/);
+  if (wikiMatch) return text;
   return text;
 }
 
@@ -934,7 +936,7 @@ async function feishuRequest(params) {
   return data;
 }
 
-function setFeishuSheets(sheets) {
+function setFeishuSheets(sheets, preferredSheetId = "") {
   els.feishuSheet.innerHTML = "";
   if (!sheets.length) {
     const option = document.createElement("option");
@@ -952,6 +954,9 @@ function setFeishuSheets(sheets) {
     option.dataset.title = sheet.title || "";
     els.feishuSheet.appendChild(option);
   });
+  if (preferredSheetId && sheets.some((sheet) => sheet.sheetId === preferredSheetId)) {
+    els.feishuSheet.value = preferredSheetId;
+  }
   els.feishuSheet.disabled = false;
   els.loadFeishuData.disabled = false;
 }
@@ -1001,7 +1006,7 @@ els.loadFeishuSheets.addEventListener("click", async () => {
   els.statusText.textContent = "正在读取飞书子表列表...";
   try {
     const data = await feishuRequest({ action: "sheets", token });
-    setFeishuSheets(data.sheets || []);
+    setFeishuSheets(data.sheets || [], data.preferredSheetId || "");
     els.statusText.textContent = "已读取子表，请选择后点击“生成表格”。";
   } catch (error) {
     console.error(error);
