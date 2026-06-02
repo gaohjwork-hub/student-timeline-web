@@ -28,6 +28,10 @@
 
 `FEISHU_ONLINE_SHEETS_NETLIFY_GUIDE.md`
 
+GitHub 推送到 Netlify 发布流程见：
+
+`GITHUB_NETLIFY_DEPLOY_GUIDE.md`
+
 外部依赖：
 
 - SheetJS：读取 Excel
