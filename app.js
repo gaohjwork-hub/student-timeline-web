@@ -73,7 +73,7 @@ const els = {
 function extractSpreadsheetToken(input) {
   const text = String(input || "").trim();
   if (!text) return "";
-  const match = text.match(/\/(?:sheets|spreadsheet)\/([A-Za-z0-9]+)/);
+  const match = text.match(/\/(?:sheets|spreadsheet)\/([A-Za-z0-9_-]+)/);
   if (match) return match[1];
   return text;
 }

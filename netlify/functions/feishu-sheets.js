@@ -15,7 +15,7 @@ function json(statusCode, body) {
 
 function normalizeToken(input) {
   const text = String(input || "").trim();
-  const match = text.match(/\/(?:sheets|spreadsheet)\/([A-Za-z0-9]+)/);
+  const match = text.match(/\/(?:sheets|spreadsheet)\/([A-Za-z0-9_-]+)/);
   return match ? match[1] : text;
 }
 
@@ -23,7 +23,7 @@ async function feishuFetch(path, options = {}) {
   const response = await fetch(`${FEISHU_BASE}${path}`, options);
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.code !== 0) {
-    const message = data.msg || data.error || `HTTP ${response.status}`;
+    const message = data.msg || data.error || `飞书接口 HTTP ${response.status}：${path}`;
     throw new Error(message);
   }
   return data;
@@ -74,6 +74,14 @@ exports.handler = async (event) => {
     const token = normalizeToken(event.queryStringParameters?.token);
     const sheetId = event.queryStringParameters?.sheetId;
     const range = event.queryStringParameters?.range || "A1:K120";
+    if (!action) {
+      return json(200, {
+        ok: true,
+        service: "feishu-sheets",
+        hasAppId: Boolean(process.env.FEISHU_APP_ID),
+        hasAppSecret: Boolean(process.env.FEISHU_APP_SECRET),
+      });
+    }
     if (!token) return json(400, { error: "缺少飞书表格 token 或链接。" });
 
     const tenantAccessToken = await getTenantAccessToken();
