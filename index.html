@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>学生时间规划表图片生成器</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="brand">Astral Academy</p>
+          <h1>学生时间规划表图片生成器</h1>
+        </div>
+        <div class="actions">
+          <label class="file-button">
+            <input id="fileInput" type="file" accept=".xlsx,.xls" />
+            上传 Excel
+          </label>
+          <button id="downloadPng" type="button" disabled>下载 PNG</button>
+          <button id="downloadPdf" type="button" disabled>下载 PDF</button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <aside class="side-panel">
+          <div class="field">
+            <label for="titleInput">标题</label>
+            <input id="titleInput" type="text" placeholder="上传后自动读取" disabled />
+          </div>
+          <div class="field">
+            <label for="scaleInput">预览缩放</label>
+            <input id="scaleInput" type="range" min="0.18" max="0.7" value="0.32" step="0.01" />
+          </div>
+          <div class="field">
+            <label for="qualityInput">导出倍率</label>
+            <select id="qualityInput">
+              <option value="1.5">标准</option>
+              <option value="2" selected>高清</option>
+              <option value="3">超清</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="feishuUrl">飞书在线表格链接</label>
+            <input id="feishuUrl" type="url" placeholder="粘贴飞书电子表格链接" />
+          </div>
+          <div class="tool-row">
+            <button id="loadFeishuSheets" type="button">读取子表</button>
+            <button id="loadFeishuData" type="button" disabled>生成表格</button>
+          </div>
+          <div class="field">
+            <label for="feishuSheet">选择子表</label>
+            <select id="feishuSheet" disabled>
+              <option value="">先读取子表</option>
+            </select>
+          </div>
+          <div class="tool-row">
+            <button id="addCard" type="button" disabled>新增色块</button>
+            <button id="deleteCard" type="button" disabled>删除选中</button>
+          </div>
+          <div class="selection-box" id="selectionBox">未选中色块</div>
+          <div class="status" id="statusText">请选择结构一致的学生时间规划表 Excel。</div>
+        </aside>
+
+        <section class="stage-wrap">
+          <div class="canvas-scroll">
+            <div id="timelineStage" class="timeline-stage empty">
+              <div class="empty-state">上传 Excel 后在这里编辑色块文字并导出</div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
