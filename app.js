@@ -66,6 +66,8 @@ const els = {
   selectionBox: document.getElementById("selectionBox"),
   downloadPng: document.getElementById("downloadPng"),
   downloadPdf: document.getElementById("downloadPdf"),
+  previewPng: document.getElementById("previewPng"),
+  previewPdf: document.getElementById("previewPdf"),
   statusText: document.getElementById("statusText"),
   stage: document.getElementById("timelineStage"),
 };
@@ -897,6 +899,45 @@ function downloadBlob(blob, filename) {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+
+function openBlob(blob) {
+  const url = URL.createObjectURL(blob);
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) {
+    window.location.href = url;
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+async function downloadOrOpenBlob(blob, filename) {
+  try {
+    downloadBlob(blob, filename);
+    return "download";
+  } catch (error) {
+    console.warn(error);
+    openBlob(blob);
+    return "open";
+  }
+}
+
+function makePdfBlob(canvas) {
+  if (!window.jspdf?.jsPDF) {
+    throw new Error("PDF 组件未加载，请刷新页面后重试。");
+  }
+  const { jsPDF } = window.jspdf;
+  const orientation = canvas.width >= canvas.height ? "landscape" : "portrait";
+  const pdfWidth = orientation === "landscape" ? 1600 : 1200;
+  const pdfHeight = pdfWidth * (canvas.height / canvas.width);
+  const pdf = new jsPDF({
+    orientation,
+    unit: "pt",
+    format: [pdfWidth, pdfHeight],
+    compress: true,
+  });
+  pdf.addImage(canvas, "PNG", 0, 0, pdfWidth, pdfHeight, undefined, "FAST");
+  return pdf.output("blob");
 }
 
 async function withExportState(message, action) {
@@ -933,6 +974,8 @@ function setReady(ready) {
   els.deleteCard.disabled = true;
   els.downloadPng.disabled = !ready;
   els.downloadPdf.disabled = !ready;
+  els.previewPng.disabled = !ready;
+  els.previewPdf.disabled = !ready;
   if (!ready) {
     state.selectedCardId = null;
     els.selectionBox.textContent = "未选中色块";
@@ -1061,27 +1104,29 @@ els.downloadPng.addEventListener("click", () => {
   withExportState("正在生成 PNG...", async () => {
     const canvas = renderToCanvas(Number(els.qualityInput.value));
     const blob = await canvasToBlob(canvas, "image/png");
-    downloadBlob(blob, safeFilename(state.model.title, "png"));
+    await downloadOrOpenBlob(blob, safeFilename(state.model.title, "png"));
   });
 });
 
 els.downloadPdf.addEventListener("click", () => {
   withExportState("正在生成 PDF...", async () => {
-    if (!window.jspdf?.jsPDF) {
-      throw new Error("PDF 组件未加载，请刷新页面后重试。");
-    }
     const canvas = renderToCanvas(Number(els.qualityInput.value));
-    const { jsPDF } = window.jspdf;
-    const orientation = canvas.width >= canvas.height ? "landscape" : "portrait";
-    const pdfWidth = orientation === "landscape" ? 1600 : 1200;
-    const pdfHeight = pdfWidth * (canvas.height / canvas.width);
-    const pdf = new jsPDF({
-      orientation,
-      unit: "pt",
-      format: [pdfWidth, pdfHeight],
-      compress: true,
-    });
-    pdf.addImage(canvas, "PNG", 0, 0, pdfWidth, pdfHeight, undefined, "FAST");
-    pdf.save(safeFilename(state.model.title, "pdf"));
+    const blob = makePdfBlob(canvas);
+    await downloadOrOpenBlob(blob, safeFilename(state.model.title, "pdf"));
+  });
+});
+
+els.previewPng.addEventListener("click", () => {
+  withExportState("正在打开 PNG...", async () => {
+    const canvas = renderToCanvas(Number(els.qualityInput.value));
+    const blob = await canvasToBlob(canvas, "image/png");
+    openBlob(blob);
+  });
+});
+
+els.previewPdf.addEventListener("click", () => {
+  withExportState("正在打开 PDF...", async () => {
+    const canvas = renderToCanvas(Number(els.qualityInput.value));
+    openBlob(makePdfBlob(canvas));
   });
 });
