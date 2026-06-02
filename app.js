@@ -220,8 +220,9 @@ function parseWorkbook(buffer, filename) {
   return model;
 }
 
-function parseOnlineValues(values, filename, sheetTitle) {
-  const matrix = trimOnlineRows(Array.isArray(values) ? values : []);
+function parseOnlineValues(values, filename, sheetTitle, feishuMerges = []) {
+  const normalizedMerges = normalizeFeishuMerges(feishuMerges);
+  const matrix = trimOnlineRows(Array.isArray(values) ? values : [], normalizedMerges);
   const rowCount = Math.max(matrix.length, 3);
   const dataEnd = rowCount;
   const valueMap = new Map();
@@ -235,13 +236,15 @@ function parseOnlineValues(values, filename, sheetTitle) {
     }
   }
   const title = String(valueMap.get("1:1") || sheetTitle || filename || "学生时间规划表");
-  const merges = inferOnlineMerges(valueMap, 3, dataEnd);
+  const merges = normalizedMerges.length
+    ? buildOnlineMergeLookup(normalizedMerges, dataEnd)
+    : inferOnlineMerges(valueMap, 3, dataEnd);
   const model = buildModelFromValues(valueMap, merges, dataEnd, title);
   collectCards(model);
   return model;
 }
 
-function trimOnlineRows(matrix) {
+function trimOnlineRows(matrix, merges = []) {
   const rows = matrix.map((row) => Array.isArray(row) ? row : []);
   let lastDataRow = Math.min(rows.length, 2);
   for (let index = 2; index < rows.length; index += 1) {
@@ -251,7 +254,73 @@ function trimOnlineRows(matrix) {
     });
     if (hasContent) lastDataRow = index + 1;
   }
+  merges.forEach((merge) => {
+    if (merge.startRow <= lastDataRow && merge.endRow > lastDataRow) {
+      lastDataRow = merge.endRow;
+    }
+  });
   return rows.slice(0, Math.max(lastDataRow, 3));
+}
+
+function firstNumber(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== "") return Number(value);
+  }
+  return null;
+}
+
+function columnLettersToNumber(letters) {
+  return String(letters || "").toUpperCase().split("").reduce((sum, ch) => sum * 26 + ch.charCodeAt(0) - 64, 0);
+}
+
+function parseA1Range(range) {
+  const match = String(range || "").match(/([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?/i);
+  if (!match) return null;
+  const startCol = columnLettersToNumber(match[1]);
+  const startRow = Number(match[2]);
+  const endCol = match[3] ? columnLettersToNumber(match[3]) : startCol;
+  const endRow = match[4] ? Number(match[4]) : startRow;
+  return { startRow, startCol, endRow, endCol };
+}
+
+function normalizeFeishuMerges(rawMerges) {
+  if (!Array.isArray(rawMerges)) return [];
+  return rawMerges.map((merge) => {
+    const a1Range = parseA1Range(merge.range || merge.range_text || merge.rangeText || merge.coord || merge.coordinate);
+    if (a1Range) return a1Range;
+    const startRowIndex = firstNumber(merge.start_row_index, merge.startRowIndex, merge.start_row, merge.startRow, merge.row);
+    const startColIndex = firstNumber(merge.start_column_index, merge.startColumnIndex, merge.start_col, merge.startCol, merge.column, merge.col);
+    if (startRowIndex === null || startColIndex === null) return null;
+    const rowCount = firstNumber(merge.row_count, merge.rowCount, merge.rows);
+    const colCount = firstNumber(merge.column_count, merge.columnCount, merge.col_count, merge.colCount, merge.cols);
+    const endRowIndex = firstNumber(merge.end_row_index, merge.endRowIndex, merge.end_row, merge.endRow);
+    const endColIndex = firstNumber(merge.end_column_index, merge.endColumnIndex, merge.end_col, merge.endCol);
+    const startRow = startRowIndex + 1;
+    const startCol = startColIndex + 1;
+    const endRow = rowCount !== null ? startRow + rowCount - 1 : (endRowIndex !== null ? endRowIndex + 1 : startRow);
+    const endCol = colCount !== null ? startCol + colCount - 1 : (endColIndex !== null ? endColIndex + 1 : startCol);
+    if (endRow < startRow || endCol < startCol) return null;
+    return { startRow, startCol, endRow, endCol };
+  }).filter(Boolean);
+}
+
+function buildOnlineMergeLookup(merges, dataEnd) {
+  const map = new Map();
+  const covered = new Map();
+  merges.forEach((merge) => {
+    const startRow = Math.max(merge.startRow, 1);
+    const startCol = Math.max(merge.startCol, 1);
+    const endRow = Math.min(merge.endRow, dataEnd);
+    const endCol = Math.min(merge.endCol, 11);
+    if (endRow < startRow || endCol < startCol || startCol > 11) return;
+    map.set(`${startRow}:${startCol}`, { endRow, endCol });
+    for (let row = startRow; row <= endRow; row += 1) {
+      for (let col = startCol; col <= endCol; col += 1) {
+        covered.set(`${row}:${col}`, { startRow, startCol, endRow, endCol });
+      }
+    }
+  });
+  return { map, covered };
 }
 
 function buildModelFromValues(values, merges, dataEnd, title) {
@@ -1087,7 +1156,7 @@ els.loadFeishuData.addEventListener("click", async () => {
     state.filename = selected?.dataset.title || selected?.textContent || "飞书在线表格";
     state.selectedCardId = null;
     state.nextCardId = 1;
-    state.model = parseOnlineValues(data.values || [], state.filename, state.filename);
+    state.model = parseOnlineValues(data.values || [], state.filename, state.filename, data.merges || []);
     els.titleInput.value = state.model.title;
     setReady(true);
     renderDom();

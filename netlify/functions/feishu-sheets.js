@@ -85,6 +85,7 @@ async function querySheets(token, tenantAccessToken) {
   return (data.data?.sheets || []).map((sheet) => ({
     sheetId: sheet.sheet_id || sheet.sheetId,
     title: sheet.title,
+    merges: sheet.merges || [],
   })).filter((sheet) => sheet.sheetId);
 }
 
@@ -126,7 +127,12 @@ exports.handler = async (event) => {
     }
     if (action === "values") {
       if (!sheetId) return json(400, { error: "缺少 sheetId。" });
-      return json(200, { values: await readValues(spreadsheet.token, sheetId, range, tenantAccessToken) });
+      const sheets = await querySheets(spreadsheet.token, tenantAccessToken);
+      const sheet = sheets.find((item) => item.sheetId === sheetId);
+      return json(200, {
+        values: await readValues(spreadsheet.token, sheetId, range, tenantAccessToken),
+        merges: sheet?.merges || [],
+      });
     }
     return json(400, { error: "未知 action。" });
   } catch (error) {
