@@ -219,7 +219,7 @@ function parseWorkbook(buffer, filename) {
 }
 
 function parseOnlineValues(values, filename, sheetTitle) {
-  const matrix = Array.isArray(values) ? values : [];
+  const matrix = trimOnlineRows(Array.isArray(values) ? values : []);
   const rowCount = Math.max(matrix.length, 3);
   const dataEnd = rowCount;
   const valueMap = new Map();
@@ -237,6 +237,19 @@ function parseOnlineValues(values, filename, sheetTitle) {
   const model = buildModelFromValues(valueMap, merges, dataEnd, title);
   collectCards(model);
   return model;
+}
+
+function trimOnlineRows(matrix) {
+  const rows = matrix.map((row) => Array.isArray(row) ? row : []);
+  let lastDataRow = Math.min(rows.length, 2);
+  for (let index = 2; index < rows.length; index += 1) {
+    const hasContent = rows[index].slice(0, 11).some((cell) => {
+      if (cell === undefined || cell === null) return false;
+      return String(cell).trim() !== "";
+    });
+    if (hasContent) lastDataRow = index + 1;
+  }
+  return rows.slice(0, Math.max(lastDataRow, 3));
 }
 
 function buildModelFromValues(values, merges, dataEnd, title) {
@@ -1027,7 +1040,7 @@ els.loadFeishuData.addEventListener("click", async () => {
   els.statusText.textContent = "正在读取飞书在线表格数据...";
   try {
     const selected = els.feishuSheet.selectedOptions[0];
-    const data = await feishuRequest({ action: "values", token, sheetId, range: "A1:K120" });
+    const data = await feishuRequest({ action: "values", token, sheetId, range: "A1:K80" });
     state.filename = selected?.dataset.title || selected?.textContent || "飞书在线表格";
     state.selectedCardId = null;
     state.nextCardId = 1;
