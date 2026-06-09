@@ -19,6 +19,23 @@ const MORANDI = {
   11: "#dde2bf",
 };
 
+const TASK_COLORS = [
+  "#c7dceb",
+  "#e5cdb8",
+  "#bfd8ba",
+  "#d8c8e2",
+  "#c7decf",
+  "#e3c7c0",
+  "#c3d3e8",
+  "#dde2bf",
+];
+
+const HEADER_FONT_SIZE = 31;
+const BODY_FONT_SIZE = 30;
+const MONTH_FONT_SIZE = 34;
+const MIN_ROW_H = 98;
+const MAX_ROW_H = 260;
+
 const GRADE_COLORS = [
   "#e5f0dc",
   "#eee7fb",
@@ -121,22 +138,70 @@ function measureText(text, size, bold = true) {
   return ctx.measureText(String(text || "")).width;
 }
 
-function calculateWidths(values, dataStart, dataEnd) {
+function taskColor(col) {
+  return TASK_COLORS[(Math.max(4, col) - 4) % TASK_COLORS.length];
+}
+
+function detectLastCol(values, merges, dataStart, dataEnd, fallback = 3) {
+  let lastCol = Math.max(3, fallback || 3);
+  values.forEach((value, key) => {
+    if (value === undefined || value === null || String(value).trim() === "") return;
+    const [row, col] = key.split(":").map(Number);
+    if (row >= 2 && row <= dataEnd) lastCol = Math.max(lastCol, col);
+  });
+  if (merges?.map) {
+    merges.map.forEach((merge, key) => {
+      const [row, col] = key.split(":").map(Number);
+      if (row <= dataEnd && merge.endRow >= 2 && col <= merge.endCol) {
+        lastCol = Math.max(lastCol, merge.endCol);
+      }
+    });
+  }
+  return Math.max(3, lastCol);
+}
+
+function calculateWidths(values, dataStart, dataEnd, lastCol) {
   const widths = { 1: 92, 2: 176, 3: 82 };
-  const minW = { 4: 290, 5: 190, 6: 320, 7: 310, 8: 300, 9: 200, 10: 390, 11: 250 };
-  const maxW = { 4: 370, 5: 250, 6: 400, 7: 390, 8: 380, 9: 270, 10: 520, 11: 330 };
-  for (let col = 4; col <= 11; col += 1) {
-    let best = measureText(values.get(`2:${col}`) || "", 31, true) + 40;
+  for (let col = 4; col <= lastCol; col += 1) {
+    let best = measureText(values.get(`2:${col}`) || "", HEADER_FONT_SIZE, true) + 42;
     for (let row = dataStart; row <= dataEnd; row += 1) {
       const value = values.get(`${row}:${col}`);
       if (!value) continue;
       String(value).split("\n").forEach((line) => {
-        best = Math.max(best, Math.min(measureText(line || " ", 30, true) + 42, maxW[col]));
+        best = Math.max(best, Math.min(measureText(line || " ", BODY_FONT_SIZE, true) + 54, 560));
       });
     }
-    widths[col] = Math.max(minW[col], Math.min(maxW[col], Math.round(best)));
+    widths[col] = Math.max(180, Math.min(560, Math.round(best)));
   }
-  return Array.from({ length: 11 }, (_, index) => widths[index + 1]);
+  return Array.from({ length: lastCol }, (_, index) => widths[index + 1] || 180);
+}
+
+function estimateWrappedLineCount(text, width) {
+  const canvas = measureText.canvas || (measureText.canvas = document.createElement("canvas"));
+  const ctx = canvas.getContext("2d");
+  ctx.font = `800 ${BODY_FONT_SIZE}px "PingFang SC", "STHeiti", "Microsoft YaHei", Arial`;
+  return wrapText(ctx, text, Math.max(80, width)).length || 1;
+}
+
+function calculateRowHeights(values, merges, dataStart, dataEnd, colW, lastCol) {
+  const rowHeights = Array.from({ length: dataEnd - dataStart + 1 }, () => MIN_ROW_H);
+  for (let row = dataStart; row <= dataEnd; row += 1) {
+    for (let col = 3; col <= lastCol; col += 1) {
+      const value = values.get(`${row}:${col}`);
+      if (!value) continue;
+      const merge = merges.map.get(`${row}:${col}`) || { endRow: row, endCol: col };
+      const colSpanW = colW.slice(col - 1, Math.min(merge.endCol, lastCol)).reduce((sum, item) => sum + item, 0);
+      const rowSpan = Math.max(1, Math.min(merge.endRow, dataEnd) - row + 1);
+      const textW = col >= 4 ? colSpanW - 50 : colSpanW - 18;
+      const lines = estimateWrappedLineCount(String(value), textW);
+      const needed = Math.min(MAX_ROW_H * rowSpan, Math.max(MIN_ROW_H, lines * BODY_FONT_SIZE * 1.22 + 34));
+      const perRow = Math.ceil(needed / rowSpan);
+      for (let target = row; target <= Math.min(merge.endRow, dataEnd); target += 1) {
+        rowHeights[target - dataStart] = Math.max(rowHeights[target - dataStart], Math.min(MAX_ROW_H, perRow));
+      }
+    }
+  }
+  return rowHeights;
 }
 
 function mergedRangesForCol(values, merges, col, dataStart, dataEnd) {
@@ -169,53 +234,15 @@ function parseWorkbook(buffer, filename) {
   const bounds = usedBounds(ws);
   const values = new Map();
   for (let row = 1; row <= bounds.maxRow; row += 1) {
-    for (let col = 1; col <= Math.max(bounds.maxCol, 11); col += 1) {
+    for (let col = 1; col <= bounds.maxCol; col += 1) {
       const value = readCell(ws, row, col);
       if (value !== undefined && value !== null && value !== "") values.set(`${row}:${col}`, value);
     }
   }
 
-  const dataStart = 3;
-  const dataEnd = bounds.maxRow;
-  const rowCount = dataEnd - dataStart + 1;
   const title = String(values.get("1:1") || filename.replace(/\.(xlsx|xls)$/i, ""));
   const merges = mergeLookup(ws);
-  const colW = calculateWidths(values, dataStart, dataEnd);
-  const margin = 82;
-  const titleH = 286;
-  const headerH = 112;
-  const rowH = 138;
-  const monthRailW = 68;
-  const dataW = colW.reduce((sum, item) => sum + item, 0);
-  const width = dataW + monthRailW + margin * 2;
-  const height = margin + titleH + headerH + rowH * rowCount + 142;
-  const x0 = margin;
-  const y0 = margin + titleH;
-  const xs = [x0];
-  for (let i = 0; i < colW.length - 1; i += 1) xs.push(xs[xs.length - 1] + colW[i]);
-
-  const model = {
-    title,
-    dataStart,
-    dataEnd,
-    rowCount,
-    margin,
-    titleH,
-    headerH,
-    rowH,
-    monthRailW,
-    dataW,
-    width,
-    height,
-    x0,
-    y0,
-    colW,
-    xs,
-    values,
-    merges,
-    cards: [],
-  };
-
+  const model = buildModelFromValues(values, merges, bounds.maxRow, title);
   collectCards(model);
   return model;
 }
@@ -228,7 +255,7 @@ function parseOnlineValues(values, filename, sheetTitle, feishuMerges = []) {
   const valueMap = new Map();
   for (let row = 1; row <= rowCount; row += 1) {
     const sourceRow = matrix[row - 1] || [];
-    for (let col = 1; col <= 11; col += 1) {
+    for (let col = 1; col <= sourceRow.length; col += 1) {
       const value = sourceRow[col - 1];
       if (value !== undefined && value !== null && value !== "") {
         valueMap.set(`${row}:${col}`, value);
@@ -236,8 +263,10 @@ function parseOnlineValues(values, filename, sheetTitle, feishuMerges = []) {
     }
   }
   const title = String(valueMap.get("1:1") || sheetTitle || filename || "学生时间规划表");
+  const valueCols = [...valueMap.keys()].map((key) => Number(key.split(":")[1]) || 0);
+  const detectedLastCol = Math.max(3, ...valueCols, ...normalizedMerges.map((merge) => merge.endCol || 0));
   const merges = normalizedMerges.length
-    ? buildOnlineMergeLookup(normalizedMerges, dataEnd)
+    ? buildOnlineMergeLookup(normalizedMerges, dataEnd, detectedLastCol)
     : inferOnlineMerges(valueMap, 3, dataEnd);
   const model = buildModelFromValues(valueMap, merges, dataEnd, title);
   collectCards(model);
@@ -248,7 +277,7 @@ function trimOnlineRows(matrix, merges = []) {
   const rows = matrix.map((row) => Array.isArray(row) ? row : []);
   let lastDataRow = Math.min(rows.length, 2);
   for (let index = 2; index < rows.length; index += 1) {
-    const hasContent = rows[index].slice(0, 11).some((cell) => {
+    const hasContent = rows[index].some((cell) => {
       if (cell === undefined || cell === null) return false;
       return String(cell).trim() !== "";
     });
@@ -304,15 +333,15 @@ function normalizeFeishuMerges(rawMerges) {
   }).filter(Boolean);
 }
 
-function buildOnlineMergeLookup(merges, dataEnd) {
+function buildOnlineMergeLookup(merges, dataEnd, lastCol = Infinity) {
   const map = new Map();
   const covered = new Map();
   merges.forEach((merge) => {
     const startRow = Math.max(merge.startRow, 1);
     const startCol = Math.max(merge.startCol, 1);
     const endRow = Math.min(merge.endRow, dataEnd);
-    const endCol = Math.min(merge.endCol, 11);
-    if (endRow < startRow || endCol < startCol || startCol > 11) return;
+    const endCol = Math.min(merge.endCol, lastCol);
+    if (endRow < startRow || endCol < startCol || startCol > lastCol) return;
     map.set(`${startRow}:${startCol}`, { endRow, endCol });
     for (let row = startRow; row <= endRow; row += 1) {
       for (let col = startCol; col <= endCol; col += 1) {
@@ -323,18 +352,20 @@ function buildOnlineMergeLookup(merges, dataEnd) {
   return { map, covered };
 }
 
-function buildModelFromValues(values, merges, dataEnd, title) {
+function buildModelFromValues(values, merges, dataEnd, title, fallbackLastCol = 3) {
   const dataStart = 3;
   const rowCount = dataEnd - dataStart + 1;
-  const colW = calculateWidths(values, dataStart, dataEnd);
+  const lastCol = detectLastCol(values, merges, dataStart, dataEnd, fallbackLastCol);
+  const colW = calculateWidths(values, dataStart, dataEnd, lastCol);
+  const rowHeights = calculateRowHeights(values, merges, dataStart, dataEnd, colW, lastCol);
   const margin = 82;
   const titleH = 286;
   const headerH = 112;
-  const rowH = 138;
   const monthRailW = 68;
   const dataW = colW.reduce((sum, item) => sum + item, 0);
+  const bodyH = rowHeights.reduce((sum, item) => sum + item, 0);
   const width = dataW + monthRailW + margin * 2;
-  const height = margin + titleH + headerH + rowH * rowCount + 142;
+  const height = margin + titleH + headerH + bodyH + 142;
   const x0 = margin;
   const y0 = margin + titleH;
   const xs = [x0];
@@ -344,10 +375,13 @@ function buildModelFromValues(values, merges, dataEnd, title) {
     dataStart,
     dataEnd,
     rowCount,
+    lastCol,
+    taskStartCol: 4,
     margin,
     titleH,
     headerH,
-    rowH,
+    rowHeights,
+    bodyH,
     monthRailW,
     dataW,
     width,
@@ -392,7 +426,7 @@ function inferOnlineMerges(values, dataStart, dataEnd) {
 function collectCards(model) {
   const drawn = new Set();
   for (let row = model.dataStart; row <= model.dataEnd; row += 1) {
-    for (let col = 4; col <= 11; col += 1) {
+    for (let col = model.taskStartCol; col <= model.lastCol; col += 1) {
       if (drawn.has(`${row}:${col}`)) continue;
       const value = model.values.get(`${row}:${col}`);
       if (value === undefined || value === null || value === "") continue;
@@ -405,9 +439,9 @@ function collectCards(model) {
         row,
         col,
         endRow: Math.min(merge.endRow, model.dataEnd),
-        endCol: Math.min(merge.endCol, 11),
+        endCol: Math.min(merge.endCol, model.lastCol),
         text: String(value),
-        fill: MORANDI[col] || "#d8d8d0",
+        fill: taskColor(col),
       });
     }
   }
@@ -437,7 +471,7 @@ function addCell(parent, className, x, y, w, h, text, size, background) {
 }
 
 function getTaskLeft(model) {
-  return model.xs[3];
+  return model.xs[model.taskStartCol - 1] || model.xs[model.lastCol - 1];
 }
 
 function getTaskRight(model) {
@@ -448,31 +482,57 @@ function getBodyTop(model) {
   return model.y0 + model.headerH;
 }
 
+function getRowHeight(model, row) {
+  return model.rowHeights[row - model.dataStart] || MIN_ROW_H;
+}
+
+function getRowTop(model, row) {
+  let y = getBodyTop(model);
+  for (let current = model.dataStart; current < row; current += 1) {
+    y += getRowHeight(model, current);
+  }
+  return y;
+}
+
+function getRowsHeight(model, startRow, endRow) {
+  let height = 0;
+  for (let row = startRow; row <= endRow; row += 1) {
+    height += getRowHeight(model, row);
+  }
+  return height;
+}
+
 function getBodyBottom(model) {
-  return getBodyTop(model) + model.rowH * model.rowCount;
+  return getBodyTop(model) + model.bodyH;
 }
 
 function cardBox(model, card) {
   const x = model.xs[card.col - 1];
-  const y = getBodyTop(model) + (card.row - model.dataStart) * model.rowH;
+  const y = getRowTop(model, card.row);
   const w = model.colW.slice(card.col - 1, card.endCol).reduce((sum, item) => sum + item, 0);
-  const h = (card.endRow - card.row + 1) * model.rowH;
+  const h = getRowsHeight(model, card.row, card.endRow);
   return { x, y, w, h };
 }
 
 function columnAt(model, x) {
   const clamped = Math.max(getTaskLeft(model), Math.min(getTaskRight(model) - 1, x));
-  for (let col = 4; col <= 11; col += 1) {
+  for (let col = model.taskStartCol; col <= model.lastCol; col += 1) {
     const left = model.xs[col - 1];
     const right = left + model.colW[col - 1];
     if (clamped >= left && clamped < right) return col;
   }
-  return 11;
+  return model.lastCol;
 }
 
 function rowAt(model, y) {
   const clamped = Math.max(getBodyTop(model), Math.min(getBodyBottom(model) - 1, y));
-  return model.dataStart + Math.floor((clamped - getBodyTop(model)) / model.rowH);
+  let top = getBodyTop(model);
+  for (let row = model.dataStart; row <= model.dataEnd; row += 1) {
+    const bottom = top + getRowHeight(model, row);
+    if (clamped >= top && clamped < bottom) return row;
+    top = bottom;
+  }
+  return model.dataEnd;
 }
 
 function setSelectedCard(id) {
@@ -495,7 +555,7 @@ function updateCardElement(model, card, node) {
   node.style.top = `${box.y + 10}px`;
   node.style.width = `${w}px`;
   node.style.height = `${h}px`;
-  node.style.fontSize = `${fitCardFont(card.text, w - 30, h - 16)}px`;
+  node.style.fontSize = `${BODY_FONT_SIZE}px`;
 }
 
 function beginCardGesture(event, card, node, mode) {
@@ -522,7 +582,7 @@ function beginCardGesture(event, card, node, mode) {
       const startBox = cardBox(model, start);
       const nextCol = columnAt(model, startBox.x + dx);
       const nextRow = rowAt(model, startBox.y + dy);
-      card.col = Math.max(4, Math.min(11 - widthCols, nextCol));
+      card.col = Math.max(model.taskStartCol, Math.min(model.lastCol - widthCols, nextCol));
       card.endCol = card.col + widthCols;
       card.row = Math.max(model.dataStart, Math.min(model.dataEnd - heightRows, nextRow));
       card.endRow = card.row + heightRows;
@@ -538,15 +598,15 @@ function beginCardGesture(event, card, node, mode) {
     }
 
     if (mode === "top") {
-      card.row = Math.min(card.endRow, rowAt(model, getBodyTop(model) + (start.row - model.dataStart) * model.rowH + dy));
+      card.row = Math.min(card.endRow, rowAt(model, getRowTop(model, start.row) + dy));
     }
 
     if (mode === "bottom") {
-      const bottomEdge = getBodyTop(model) + (start.endRow - model.dataStart + 1) * model.rowH + dy;
+      const bottomEdge = getRowTop(model, start.endRow) + getRowHeight(model, start.endRow) + dy;
       card.endRow = Math.max(card.row, rowAt(model, bottomEdge));
     }
 
-    card.fill = MORANDI[card.col] || card.fill;
+    card.fill = taskColor(card.col);
     updateCardElement(model, card, node);
     setSelectedCard(card.id);
   }
@@ -567,11 +627,11 @@ function addNewCard() {
   const card = {
     id: `card-${state.nextCardId++}`,
     row: state.model.dataStart,
-    col: 4,
+    col: state.model.taskStartCol,
     endRow: state.model.dataStart,
-    endCol: 4,
+    endCol: state.model.taskStartCol,
     text: "新增计划",
-    fill: MORANDI[4],
+    fill: taskColor(state.model.taskStartCol),
   };
   state.model.cards.push(card);
   renderDom();
@@ -615,43 +675,45 @@ function renderDom() {
     left: model.x0 - 18,
     top: model.y0 - 18,
     width: tableW + 36,
-    height: model.headerH + model.rowH * model.rowCount + 36,
+    height: model.headerH + model.bodyH + 36,
   }));
 
-  const headers = Array.from({ length: 11 }, (_, index) => String(model.values.get(`2:${index + 1}`) || ""));
+  const headers = Array.from({ length: model.lastCol }, (_, index) => String(model.values.get(`2:${index + 1}`) || ""));
   headers[0] = "阶段";
   headers.forEach((text, index) => {
-    addCell(els.stage, "header-cell", model.xs[index], model.y0, model.colW[index], model.headerH, text, 31, COLORS.oxford);
+    addCell(els.stage, "header-cell", model.xs[index], model.y0, model.colW[index], model.headerH, text, HEADER_FONT_SIZE, COLORS.oxford);
   });
   addCell(els.stage, "header-cell", model.x0 + model.dataW, model.y0, model.monthRailW, model.headerH, "", 24, COLORS.month);
 
   for (let i = 0; i < model.rowCount; i += 1) {
-    const y = model.y0 + model.headerH + i * model.rowH;
+    const row = model.dataStart + i;
+    const y = getRowTop(model, row);
     els.stage.appendChild(el("cell", {
       left: model.x0,
       top: y,
       width: tableW,
-      height: model.rowH,
+      height: getRowHeight(model, row),
       background: i % 2 === 0 ? "#fbfcfb" : "#f1f4f2",
     }));
   }
 
   mergedRangesForCol(model.values, model.merges, 2, model.dataStart, model.dataEnd).forEach((range) => {
-    const y = model.y0 + model.headerH + (range.row - model.dataStart) * model.rowH;
-    const h = (range.endRow - range.row + 1) * model.rowH;
-    addCell(els.stage, "grade-cell", model.xs[1], y, model.colW[1], h, range.label, 34, termColor(range.label));
+    const y = getRowTop(model, range.row);
+    const h = getRowsHeight(model, range.row, range.endRow);
+    addCell(els.stage, "grade-cell", model.xs[1], y, model.colW[1], h, range.label, BODY_FONT_SIZE, termColor(range.label));
   });
 
   mergedRangesForCol(model.values, model.merges, 1, model.dataStart, model.dataEnd).forEach((range) => {
-    const y = model.y0 + model.headerH + (range.row - model.dataStart) * model.rowH;
-    const h = (range.endRow - range.row + 1) * model.rowH;
-    addCell(els.stage, "stage-cell", model.xs[0], y, model.colW[0], h, range.label, 31, STAGE_COLORS[range.label] || "#d9e5ea");
+    const y = getRowTop(model, range.row);
+    const h = getRowsHeight(model, range.row, range.endRow);
+    addCell(els.stage, "stage-cell", model.xs[0], y, model.colW[0], h, range.label, BODY_FONT_SIZE, STAGE_COLORS[range.label] || "#d9e5ea");
   });
 
   for (let row = model.dataStart; row <= model.dataEnd; row += 1) {
-    const y = model.y0 + model.headerH + (row - model.dataStart) * model.rowH;
-    addCell(els.stage, "month-cell", model.xs[2], y, model.colW[2], model.rowH, String(model.values.get(`${row}:3`) || ""), 36, COLORS.month);
-    addCell(els.stage, "month-rail", model.x0 + model.dataW, y, model.monthRailW, model.rowH, String(model.values.get(`${row}:3`) || ""), 26, COLORS.month);
+    const y = getRowTop(model, row);
+    const h = getRowHeight(model, row);
+    addCell(els.stage, "month-cell", model.xs[2], y, model.colW[2], h, String(model.values.get(`${row}:3`) || ""), MONTH_FONT_SIZE, COLORS.month);
+    addCell(els.stage, "month-rail", model.x0 + model.dataW, y, model.monthRailW, h, String(model.values.get(`${row}:3`) || ""), 26, COLORS.month);
   }
 
   model.cards.forEach((card) => {
@@ -664,7 +726,7 @@ function renderDom() {
       width: w,
       height: h,
       background: card.fill,
-      fontSize: fitCardFont(card.text, w - 30, h - 16),
+      fontSize: BODY_FONT_SIZE,
     });
     const textNode = el("card-text", {}, card.text);
     textNode.contentEditable = "true";
@@ -675,7 +737,7 @@ function renderDom() {
     });
     textNode.addEventListener("input", () => {
       card.text = textNode.textContent || "";
-      node.style.fontSize = `${fitCardFont(card.text, w - 30, h - 16)}px`;
+      node.style.fontSize = `${BODY_FONT_SIZE}px`;
     });
     node.appendChild(textNode);
 
@@ -699,7 +761,7 @@ function renderDom() {
     els.stage.appendChild(node);
   });
 
-  const fy = model.y0 + model.headerH + model.rowH * model.rowCount + 48;
+  const fy = model.y0 + model.headerH + model.bodyH + 48;
   els.stage.appendChild(el("footer-line", { left: model.margin, top: fy, width: model.width - model.margin * 2 }));
   els.stage.appendChild(el("footer-left", { left: model.margin, top: fy + 24, width: 520, fontSize: 30 }, "星屿国际教育 Astral Academy"));
   els.stage.appendChild(el("footer-right", { left: model.width - model.margin - 720, top: fy + 24, width: 720, fontSize: 28 }, model.title));
@@ -760,14 +822,7 @@ function wrapText(ctx, text, maxWidth) {
 }
 
 function fitCardFont(text, maxW, maxH) {
-  const canvas = measureText.canvas || (measureText.canvas = document.createElement("canvas"));
-  const ctx = canvas.getContext("2d");
-  for (let size = 32; size >= 23; size -= 1) {
-    ctx.font = `800 ${size}px "PingFang SC", "STHeiti", "Microsoft YaHei", Arial`;
-    const lines = wrapText(ctx, text, maxW);
-    if (lines.length * size * 1.16 <= maxH) return size;
-  }
-  return 23;
+  return BODY_FONT_SIZE;
 }
 
 function roundRect(ctx, x, y, w, h, radius) {
@@ -833,28 +888,30 @@ function renderToCanvas(multiplier = 2) {
 
   const tableW = model.dataW + model.monthRailW;
   ctx.fillStyle = "#ffffff";
-  roundRect(ctx, model.x0 - 18, model.y0 - 18, tableW + 36, model.headerH + model.rowH * model.rowCount + 36, 18);
+  roundRect(ctx, model.x0 - 18, model.y0 - 18, tableW + 36, model.headerH + model.bodyH + 36, 18);
   ctx.fill();
   ctx.strokeStyle = "#e1e6e8";
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  const headers = Array.from({ length: 11 }, (_, index) => String(model.values.get(`2:${index + 1}`) || ""));
+  const headers = Array.from({ length: model.lastCol }, (_, index) => String(model.values.get(`2:${index + 1}`) || ""));
   headers[0] = "阶段";
   headers.forEach((text, index) => {
     ctx.fillStyle = COLORS.oxford;
     ctx.fillRect(model.xs[index], model.y0, model.colW[index], model.headerH);
-    drawCentered(ctx, model.xs[index] + 8, model.y0, model.colW[index] - 16, model.headerH, text, 31, "#ffffff");
+    drawCentered(ctx, model.xs[index] + 8, model.y0, model.colW[index] - 16, model.headerH, text, HEADER_FONT_SIZE, "#ffffff");
   });
   ctx.fillStyle = COLORS.month;
   ctx.fillRect(model.x0 + model.dataW, model.y0, model.monthRailW, model.headerH);
 
   for (let i = 0; i < model.rowCount; i += 1) {
-    const y = model.y0 + model.headerH + i * model.rowH;
+    const row = model.dataStart + i;
+    const y = getRowTop(model, row);
+    const h = getRowHeight(model, row);
     ctx.fillStyle = i % 2 === 0 ? "#fbfcfb" : "#f1f4f2";
-    ctx.fillRect(model.x0, y, tableW, model.rowH);
+    ctx.fillRect(model.x0, y, tableW, h);
     ctx.fillStyle = COLORS.month;
-    ctx.fillRect(model.x0 + model.dataW, y, model.monthRailW, model.rowH);
+    ctx.fillRect(model.x0 + model.dataW, y, model.monthRailW, h);
     ctx.strokeStyle = COLORS.grid;
     ctx.lineWidth = i % 2 === 0 ? 2 : 1;
     ctx.beginPath();
@@ -864,32 +921,32 @@ function renderToCanvas(multiplier = 2) {
   }
 
   mergedRangesForCol(model.values, model.merges, 2, model.dataStart, model.dataEnd).forEach((range) => {
-    const y = model.y0 + model.headerH + (range.row - model.dataStart) * model.rowH;
-    const h = (range.endRow - range.row + 1) * model.rowH;
+    const y = getRowTop(model, range.row);
+    const h = getRowsHeight(model, range.row, range.endRow);
     ctx.fillStyle = termColor(range.label);
     ctx.fillRect(model.xs[1], y, model.colW[1], h);
     ctx.strokeStyle = "#c9d3d8";
     ctx.lineWidth = 2;
     ctx.strokeRect(model.xs[1], y, model.colW[1], h);
-    drawCentered(ctx, model.xs[1], y, model.colW[1], h, range.label, 34, COLORS.ink);
+    drawCentered(ctx, model.xs[1], y, model.colW[1], h, range.label, BODY_FONT_SIZE, COLORS.ink);
   });
 
   mergedRangesForCol(model.values, model.merges, 1, model.dataStart, model.dataEnd).forEach((range) => {
-    const y = model.y0 + model.headerH + (range.row - model.dataStart) * model.rowH;
-    const h = (range.endRow - range.row + 1) * model.rowH;
+    const y = getRowTop(model, range.row);
+    const h = getRowsHeight(model, range.row, range.endRow);
     ctx.fillStyle = STAGE_COLORS[range.label] || "#d9e5ea";
     ctx.fillRect(model.xs[0], y, model.colW[0], h);
     ctx.strokeStyle = "#c9d3d8";
     ctx.lineWidth = 2;
     ctx.strokeRect(model.xs[0], y, model.colW[0], h);
-    drawCentered(ctx, model.xs[0], y, model.colW[0], h, range.label, 31, COLORS.oxford, true);
+    drawCentered(ctx, model.xs[0], y, model.colW[0], h, range.label, BODY_FONT_SIZE, COLORS.oxford, true);
   });
 
   model.cards.forEach((card) => {
     const x = model.xs[card.col - 1];
-    const y = model.y0 + model.headerH + (card.row - model.dataStart) * model.rowH;
+    const y = getRowTop(model, card.row);
     const w = model.colW.slice(card.col - 1, card.endCol).reduce((sum, item) => sum + item, 0);
-    const h = (card.endRow - card.row + 1) * model.rowH;
+    const h = getRowsHeight(model, card.row, card.endRow);
     const pad = 10;
     ctx.fillStyle = card.fill;
     roundRect(ctx, x + pad, y + pad, w - 2 * pad, h - 2 * pad, 12);
@@ -897,7 +954,7 @@ function renderToCanvas(multiplier = 2) {
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 2;
     ctx.stroke();
-    const fontSize = fitCardFont(card.text, w - 50, h - 36);
+    const fontSize = BODY_FONT_SIZE;
     ctx.font = `800 ${fontSize}px "PingFang SC", "STHeiti", "Microsoft YaHei", Arial`;
     ctx.fillStyle = COLORS.ink;
     ctx.textAlign = "left";
@@ -912,21 +969,22 @@ function renderToCanvas(multiplier = 2) {
   });
 
   for (let row = model.dataStart; row <= model.dataEnd; row += 1) {
-    const y = model.y0 + model.headerH + (row - model.dataStart) * model.rowH;
+    const y = getRowTop(model, row);
+    const h = getRowHeight(model, row);
     const month = String(model.values.get(`${row}:3`) || "");
     ctx.fillStyle = COLORS.month;
-    ctx.fillRect(model.xs[2], y, model.colW[2], model.rowH);
+    ctx.fillRect(model.xs[2], y, model.colW[2], h);
     ctx.strokeStyle = "#c9d3d8";
     ctx.lineWidth = 2;
-    ctx.strokeRect(model.xs[2], y, model.colW[2], model.rowH);
-    drawCentered(ctx, model.xs[2], y, model.colW[2], model.rowH, month, 36, COLORS.oxford);
+    ctx.strokeRect(model.xs[2], y, model.colW[2], h);
+    drawCentered(ctx, model.xs[2], y, model.colW[2], h, month, MONTH_FONT_SIZE, COLORS.oxford);
     ctx.strokeStyle = "#d8e1e5";
     ctx.lineWidth = 1;
-    ctx.strokeRect(model.x0 + model.dataW, y, model.monthRailW, model.rowH);
-    drawCentered(ctx, model.x0 + model.dataW, y, model.monthRailW, model.rowH, month, 26, "#8ea1ad");
+    ctx.strokeRect(model.x0 + model.dataW, y, model.monthRailW, h);
+    drawCentered(ctx, model.x0 + model.dataW, y, model.monthRailW, h, month, 26, "#8ea1ad");
   }
 
-  const fy = model.y0 + model.headerH + model.rowH * model.rowCount + 48;
+  const fy = model.y0 + model.headerH + model.bodyH + 48;
   ctx.fillStyle = "#c9d6dc";
   ctx.fillRect(model.margin, fy, model.width - model.margin * 2, 2);
   ctx.textAlign = "left";
@@ -1152,7 +1210,7 @@ els.loadFeishuData.addEventListener("click", async () => {
   els.statusText.textContent = "正在读取飞书在线表格数据...";
   try {
     const selected = els.feishuSheet.selectedOptions[0];
-    const data = await feishuRequest({ action: "values", token, sheetId, range: "A1:K80" });
+    const data = await feishuRequest({ action: "values", token, sheetId, range: "A1:Z80" });
     state.filename = selected?.dataset.title || selected?.textContent || "飞书在线表格";
     state.selectedCardId = null;
     state.nextCardId = 1;

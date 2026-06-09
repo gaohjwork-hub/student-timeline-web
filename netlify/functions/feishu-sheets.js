@@ -90,7 +90,7 @@ async function querySheets(token, tenantAccessToken) {
 }
 
 async function readValues(token, sheetId, range, tenantAccessToken) {
-  const fullRange = `${sheetId}!${range || "A1:K120"}`;
+  const fullRange = `${sheetId}!${range || "A1:Z120"}`;
   const encodedRange = encodeURIComponent(fullRange);
   const data = await feishuFetch(`/sheets/v2/spreadsheets/${token}/values/${encodedRange}`, {
     headers: { Authorization: `Bearer ${tenantAccessToken}` },
@@ -106,7 +106,7 @@ exports.handler = async (event) => {
     const action = event.queryStringParameters?.action;
     const resource = normalizeToken(event.queryStringParameters?.token);
     const sheetId = event.queryStringParameters?.sheetId;
-    const range = event.queryStringParameters?.range || "A1:K120";
+    const range = event.queryStringParameters?.range || "A1:Z120";
     if (!action) {
       return json(200, {
         ok: true,
