@@ -102,7 +102,56 @@ function extractSpreadsheetToken(input) {
 function readCell(ws, row, col) {
   const ref = XLSX.utils.encode_cell({ r: row - 1, c: col - 1 });
   const cell = ws[ref];
-  return cell ? cell.v : "";
+  return cell ? normalizeCellText(cell.w ?? cell.v) : "";
+}
+
+function normalizeCellText(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value).replace(/\r\n?/g, "\n").trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeCellText).filter(Boolean).join("");
+  }
+  if (typeof value === "object") {
+    const type = String(value.type || value.segmentType || value.segment_type || "").toLowerCase();
+    if (type.includes("line") || type.includes("break")) return "\n";
+    const direct = [
+      value.text,
+      value.plainText,
+      value.plain_text,
+      value.value,
+      value.formattedValue,
+      value.formatted_value,
+      value.stringValue,
+      value.string_value,
+      value.link,
+      value.url,
+      value.name,
+    ].find((item) => item !== undefined && item !== null && item !== "");
+    if (direct !== undefined) return normalizeCellText(direct);
+    if (Array.isArray(value.elements)) return normalizeCellText(value.elements);
+    if (Array.isArray(value.segments)) return normalizeCellText(value.segments);
+    if (Array.isArray(value.textRuns)) return normalizeCellText(value.textRuns);
+    if (Array.isArray(value.runs)) return normalizeCellText(value.runs);
+    if (value.type && value.text) return normalizeCellText(value.text);
+    return "";
+  }
+  return String(value).replace(/\r\n?/g, "\n").trim();
+}
+
+function editableText(node) {
+  const blockTags = new Set(["DIV", "P"]);
+  const readNode = (current) => {
+    if (current.nodeType === Node.TEXT_NODE) return current.textContent || "";
+    if (current.nodeName === "BR") return "\n";
+    const text = Array.from(current.childNodes).map(readNode).join("");
+    return blockTags.has(current.nodeName) ? `\n${text}` : text;
+  };
+  return Array.from(node.childNodes).map(readNode).join("")
+    .replace(/\u00a0/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n/, "");
 }
 
 function usedBounds(ws) {
@@ -145,7 +194,7 @@ function taskColor(col) {
 function detectLastCol(values, merges, dataStart, dataEnd, fallback = 3) {
   let lastCol = Math.max(3, fallback || 3);
   values.forEach((value, key) => {
-    if (value === undefined || value === null || String(value).trim() === "") return;
+    if (!normalizeCellText(value)) return;
     const [row, col] = key.split(":").map(Number);
     if (row >= 2 && row <= dataEnd) lastCol = Math.max(lastCol, col);
   });
@@ -167,7 +216,7 @@ function calculateWidths(values, dataStart, dataEnd, lastCol) {
     for (let row = dataStart; row <= dataEnd; row += 1) {
       const value = values.get(`${row}:${col}`);
       if (!value) continue;
-      String(value).split("\n").forEach((line) => {
+      normalizeCellText(value).split("\n").forEach((line) => {
         best = Math.max(best, Math.min(measureText(line || " ", BODY_FONT_SIZE, true) + 54, 560));
       });
     }
@@ -193,7 +242,7 @@ function calculateRowHeights(values, merges, dataStart, dataEnd, colW, lastCol) 
       const colSpanW = colW.slice(col - 1, Math.min(merge.endCol, lastCol)).reduce((sum, item) => sum + item, 0);
       const rowSpan = Math.max(1, Math.min(merge.endRow, dataEnd) - row + 1);
       const textW = col >= 4 ? colSpanW - 50 : colSpanW - 18;
-      const lines = estimateWrappedLineCount(String(value), textW);
+      const lines = estimateWrappedLineCount(normalizeCellText(value), textW);
       const needed = Math.min(MAX_ROW_H * rowSpan, Math.max(MIN_ROW_H, lines * BODY_FONT_SIZE * 1.22 + 34));
       const perRow = Math.ceil(needed / rowSpan);
       for (let target = row; target <= Math.min(merge.endRow, dataEnd); target += 1) {
@@ -213,7 +262,7 @@ function mergedRangesForCol(values, merges, col, dataStart, dataEnd) {
     if (!label) continue;
     const merge = merges.map.get(`${row}:${col}`) || { endRow: row, endCol: col };
     const endRow = Math.min(merge.endRow, dataEnd);
-    ranges.push({ label: String(label), row, endRow });
+    ranges.push({ label: normalizeCellText(label), row, endRow });
     for (let item = row; item <= endRow; item += 1) seen.add(item);
   }
   return ranges;
@@ -235,12 +284,12 @@ function parseWorkbook(buffer, filename) {
   const values = new Map();
   for (let row = 1; row <= bounds.maxRow; row += 1) {
     for (let col = 1; col <= bounds.maxCol; col += 1) {
-      const value = readCell(ws, row, col);
-      if (value !== undefined && value !== null && value !== "") values.set(`${row}:${col}`, value);
+      const value = normalizeCellText(readCell(ws, row, col));
+      if (value) values.set(`${row}:${col}`, value);
     }
   }
 
-  const title = String(values.get("1:1") || filename.replace(/\.(xlsx|xls)$/i, ""));
+  const title = normalizeCellText(values.get("1:1")) || filename.replace(/\.(xlsx|xls)$/i, "");
   const merges = mergeLookup(ws);
   const model = buildModelFromValues(values, merges, bounds.maxRow, title);
   collectCards(model);
@@ -256,13 +305,13 @@ function parseOnlineValues(values, filename, sheetTitle, feishuMerges = []) {
   for (let row = 1; row <= rowCount; row += 1) {
     const sourceRow = matrix[row - 1] || [];
     for (let col = 1; col <= sourceRow.length; col += 1) {
-      const value = sourceRow[col - 1];
-      if (value !== undefined && value !== null && value !== "") {
+      const value = normalizeCellText(sourceRow[col - 1]);
+      if (value) {
         valueMap.set(`${row}:${col}`, value);
       }
     }
   }
-  const title = String(valueMap.get("1:1") || sheetTitle || filename || "学生时间规划表");
+  const title = normalizeCellText(valueMap.get("1:1")) || sheetTitle || filename || "学生时间规划表";
   const valueCols = [...valueMap.keys()].map((key) => Number(key.split(":")[1]) || 0);
   const detectedLastCol = Math.max(3, ...valueCols, ...normalizedMerges.map((merge) => merge.endCol || 0));
   const merges = normalizedMerges.length
@@ -278,8 +327,7 @@ function trimOnlineRows(matrix, merges = []) {
   let lastDataRow = Math.min(rows.length, 2);
   for (let index = 2; index < rows.length; index += 1) {
     const hasContent = rows[index].some((cell) => {
-      if (cell === undefined || cell === null) return false;
-      return String(cell).trim() !== "";
+      return normalizeCellText(cell) !== "";
     });
     if (hasContent) lastDataRow = index + 1;
   }
@@ -440,7 +488,7 @@ function collectCards(model) {
         col,
         endRow: Math.min(merge.endRow, model.dataEnd),
         endCol: Math.min(merge.endCol, model.lastCol),
-        text: String(value),
+        text: normalizeCellText(value),
         fill: taskColor(col),
       });
     }
@@ -678,7 +726,7 @@ function renderDom() {
     height: model.headerH + model.bodyH + 36,
   }));
 
-  const headers = Array.from({ length: model.lastCol }, (_, index) => String(model.values.get(`2:${index + 1}`) || ""));
+  const headers = Array.from({ length: model.lastCol }, (_, index) => normalizeCellText(model.values.get(`2:${index + 1}`)));
   headers[0] = "阶段";
   headers.forEach((text, index) => {
     addCell(els.stage, "header-cell", model.xs[index], model.y0, model.colW[index], model.headerH, text, HEADER_FONT_SIZE, COLORS.oxford);
@@ -712,8 +760,8 @@ function renderDom() {
   for (let row = model.dataStart; row <= model.dataEnd; row += 1) {
     const y = getRowTop(model, row);
     const h = getRowHeight(model, row);
-    addCell(els.stage, "month-cell", model.xs[2], y, model.colW[2], h, String(model.values.get(`${row}:3`) || ""), MONTH_FONT_SIZE, COLORS.month);
-    addCell(els.stage, "month-rail", model.x0 + model.dataW, y, model.monthRailW, h, String(model.values.get(`${row}:3`) || ""), 26, COLORS.month);
+    addCell(els.stage, "month-cell", model.xs[2], y, model.colW[2], h, normalizeCellText(model.values.get(`${row}:3`)), MONTH_FONT_SIZE, COLORS.month);
+    addCell(els.stage, "month-rail", model.x0 + model.dataW, y, model.monthRailW, h, normalizeCellText(model.values.get(`${row}:3`)), 26, COLORS.month);
   }
 
   model.cards.forEach((card) => {
@@ -736,7 +784,7 @@ function renderDom() {
       setSelectedCard(card.id);
     });
     textNode.addEventListener("input", () => {
-      card.text = textNode.textContent || "";
+      card.text = editableText(textNode);
       node.style.fontSize = `${BODY_FONT_SIZE}px`;
     });
     node.appendChild(textNode);
@@ -894,7 +942,7 @@ function renderToCanvas(multiplier = 2) {
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  const headers = Array.from({ length: model.lastCol }, (_, index) => String(model.values.get(`2:${index + 1}`) || ""));
+  const headers = Array.from({ length: model.lastCol }, (_, index) => normalizeCellText(model.values.get(`2:${index + 1}`)));
   headers[0] = "阶段";
   headers.forEach((text, index) => {
     ctx.fillStyle = COLORS.oxford;
@@ -959,7 +1007,7 @@ function renderToCanvas(multiplier = 2) {
     ctx.fillStyle = COLORS.ink;
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    const lines = wrapText(ctx, card.text, w - 50);
+    const lines = wrapText(ctx, normalizeCellText(card.text), w - 50);
     const lineH = fontSize * 1.14;
     let ty = y + h / 2 - (lines.length * lineH) / 2;
     lines.forEach((line) => {
@@ -971,7 +1019,7 @@ function renderToCanvas(multiplier = 2) {
   for (let row = model.dataStart; row <= model.dataEnd; row += 1) {
     const y = getRowTop(model, row);
     const h = getRowHeight(model, row);
-    const month = String(model.values.get(`${row}:3`) || "");
+    const month = normalizeCellText(model.values.get(`${row}:3`));
     ctx.fillStyle = COLORS.month;
     ctx.fillRect(model.xs[2], y, model.colW[2], h);
     ctx.strokeStyle = "#c9d3d8";
